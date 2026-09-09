@@ -1,0 +1,6 @@
+node_modules/
+.env
+logic_cpp/build/
+*.exe
+*.o
+*.out
