@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
@@ -10,6 +11,7 @@ app.use(cors());
 
 const idempotencyCache = new Set();
 const CPP_ENGINE_URL = process.env.CPP_ENGINE_URL || 'http://127.0.0.1:8080';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'upi_super_secret_key_2026';
 
 app.post('/checkout', async (req, res) => {
     const { amount, currency, idempotency_key, customer_vpa } = req.body;
@@ -18,7 +20,6 @@ app.post('/checkout', async (req, res) => {
         return res.status(400).json({ error: "Missing required fields: amount or idempotency_key" });
     }
 
-    // 1. Check if this payment request was already sent
     if (idempotencyCache.has(idempotency_key)) {
         console.log(`[Gateway] Blocked duplicate request for key: ${idempotency_key}`);
         return res.status(409).json({ 
@@ -26,16 +27,12 @@ app.post('/checkout', async (req, res) => {
         });
     }
     
-    // 2. Lock the key so it cannot be used again
     idempotencyCache.add(idempotency_key);
-
-    // 3. Generate an internal transaction ID for our C++ engine
     const internal_txn_id = `txn_${uuidv4()}`;
 
     try {
         console.log(`[Gateway] Initiating transaction: ${internal_txn_id} for amount: ${amount}`);
         
-        // 4. Forward transaction to the C++ Core Engine over TCP port 8080
         const cppResponse = await axios.post(`${CPP_ENGINE_URL}/internal/init`, {
             internal_txn_id: internal_txn_id,
             amount: String(amount),
@@ -53,8 +50,46 @@ app.post('/checkout', async (req, res) => {
 
     } catch (error) {
         console.error(`[Gateway] Error communicating with C++ Core:`, error.message);
-        idempotencyCache.delete(idempotency_key); // Unlock on failure so user can retry
+        idempotencyCache.delete(idempotency_key);
         res.status(500).json({ error: "Internal Server Error: Core Engine unreachable" });
+    }
+});
+
+app.post('/webhook', async (req, res) => {
+    const signature = req.headers['x-webhook-signature'];
+    const payload = JSON.stringify(req.body);
+
+    const expectedSignature = crypto
+        .createHmac('sha256', WEBHOOK_SECRET)
+        .update(payload)
+        .digest('hex');
+
+    if (!signature || signature !== expectedSignature) {
+        console.warn(`[Webhook] Security Alert: Rejected forged webhook signature!`);
+        return res.status(401).json({ error: "Unauthorized: Invalid HMAC signature" });
+    }
+
+    const { transaction_id, status } = req.body;
+    if (!transaction_id || !status) {
+        return res.status(400).json({ error: "Missing transaction_id or status" });
+    }
+
+    try {
+        console.log(`[Webhook] Verified bank callback for ${transaction_id} -> ${status}`);
+        const cppResponse = await axios.post(`${CPP_ENGINE_URL}/internal/update`, {
+            internal_txn_id: transaction_id,
+            status: status
+        });
+
+        res.status(200).json({
+            message: "Webhook processed successfully",
+            data: cppResponse.data
+        });
+    } catch (error) {
+        if (error.response) {
+            return res.status(error.response.status).json(error.response.data);
+        }
+        res.status(500).json({ error: "Failed to update C++ Core Engine" });
     }
 });
 

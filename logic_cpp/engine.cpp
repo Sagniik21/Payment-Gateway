@@ -16,6 +16,13 @@ enum class TxnState {
 unordered_map<string, TxnState> store;
 CRITICAL_SECTION mtx;
 
+string state_to_string(TxnState s) {
+    if (s == TxnState::PENDING) return "PENDING";
+    if (s == TxnState::CAPTURED) return "CAPTURED";
+    if (s == TxnState::FAILED) return "FAILED";
+    return "INITIATED";
+}
+
 string extract_field(const string& body, const string& key) {
     string search_key = "\"" + key + "\"";
     size_t pos = body.find(search_key);
@@ -87,6 +94,27 @@ int main() {
 
                     string resp_body = "{\"status\":\"PENDING\",\"txn_id\":\"" + txn_id + "\"}";
                     send_json(client_socket, 200, "OK", resp_body);
+                }
+            } else if (req.find("POST /internal/update") != string::npos) {
+                string txn_id = extract_field(body, "internal_txn_id");
+                string new_status = extract_field(body, "status");
+
+                EnterCriticalSection(&mtx);
+                if (store.find(txn_id) == store.end()) {
+                    LeaveCriticalSection(&mtx);
+                    send_json(client_socket, 404, "Not Found", "{\"error\":\"Transaction ID not found\"}");
+                } else if (store[txn_id] != TxnState::PENDING) {
+                    string curr = state_to_string(store[txn_id]);
+                    LeaveCriticalSection(&mtx);
+                    cout << "[C++ Core] Rejected invalid transition for " << txn_id << " (Already " << curr << ")" << endl;
+                    send_json(client_socket, 409, "Conflict", "{\"error\":\"Transaction already in terminal state: " + curr + "\"}");
+                } else {
+                    store[txn_id] = (new_status == "CAPTURED") ? TxnState::CAPTURED : TxnState::FAILED;
+                    string updated = state_to_string(store[txn_id]);
+                    LeaveCriticalSection(&mtx);
+
+                    cout << "[C++ Core] State Transition: " << txn_id << " moved PENDING -> " << updated << endl;
+                    send_json(client_socket, 200, "OK", "{\"status\":\"" + updated + "\",\"txn_id\":\"" + txn_id + "\"}");
                 }
             } else {
                 send_json(client_socket, 404, "Not Found", "{\"error\":\"Route not found\"}");
