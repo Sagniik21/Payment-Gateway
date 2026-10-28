@@ -93,6 +93,21 @@ app.post('/webhook', async (req, res) => {
     }
 });
 
+app.get('/status/:txn_id', async (req, res) => {
+    const { txn_id } = req.params;
+    try {
+        const cppResponse = await axios.post(`${CPP_ENGINE_URL}/internal/status`, {
+            internal_txn_id: txn_id
+        });
+        res.status(200).json(cppResponse.data);
+    } catch (error) {
+        if (error.response) {
+            return res.status(error.response.status).json(error.response.data);
+        }
+        res.status(500).json({ error: "Failed to query C++ Core Engine" });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`API Gateway running on port ${PORT}`);

@@ -3,6 +3,8 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <fstream>
+#include <ctime>
 
 using namespace std;
 
@@ -21,6 +23,16 @@ string state_to_string(TxnState s) {
     if (s == TxnState::CAPTURED) return "CAPTURED";
     if (s == TxnState::FAILED) return "FAILED";
     return "INITIATED";
+}
+
+void write_audit_log(const string& txn_id, const string& state, const string& info) {
+    ofstream log_file("ledger.log", ios::app);
+    if (log_file.is_open()) {
+        time_t now = time(0);
+        log_file << "[" << now << "] TXN: " << txn_id 
+                 << " | STATE: " << state 
+                 << " | INFO: " << info << "\n";
+    }
 }
 
 string extract_field(const string& body, const string& key) {
@@ -88,6 +100,7 @@ int main() {
                 } else {
                     EnterCriticalSection(&mtx);
                     store[txn_id] = TxnState::PENDING;
+                    write_audit_log(txn_id, "PENDING", "Amount=" + amount);
                     LeaveCriticalSection(&mtx);
 
                     cout << "[C++ Core] Transaction " << txn_id << " locked in state: PENDING (Amount: " << amount << ")" << endl;
@@ -111,10 +124,23 @@ int main() {
                 } else {
                     store[txn_id] = (new_status == "CAPTURED") ? TxnState::CAPTURED : TxnState::FAILED;
                     string updated = state_to_string(store[txn_id]);
+                    write_audit_log(txn_id, updated, "Transitioned from PENDING");
                     LeaveCriticalSection(&mtx);
 
                     cout << "[C++ Core] State Transition: " << txn_id << " moved PENDING -> " << updated << endl;
                     send_json(client_socket, 200, "OK", "{\"status\":\"" + updated + "\",\"txn_id\":\"" + txn_id + "\"}");
+                }
+            } else if (req.find("POST /internal/status") != string::npos) {
+                string txn_id = extract_field(body, "internal_txn_id");
+
+                EnterCriticalSection(&mtx);
+                if (store.find(txn_id) == store.end()) {
+                    LeaveCriticalSection(&mtx);
+                    send_json(client_socket, 404, "Not Found", "{\"error\":\"Transaction ID not found\"}");
+                } else {
+                    string curr = state_to_string(store[txn_id]);
+                    LeaveCriticalSection(&mtx);
+                    send_json(client_socket, 200, "OK", "{\"status\":\"" + curr + "\",\"txn_id\":\"" + txn_id + "\"}");
                 }
             } else {
                 send_json(client_socket, 404, "Not Found", "{\"error\":\"Route not found\"}");

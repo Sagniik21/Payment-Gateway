@@ -4,3 +4,4 @@ logic_cpp/build/
 *.exe
 *.o
 *.out
+*.log
