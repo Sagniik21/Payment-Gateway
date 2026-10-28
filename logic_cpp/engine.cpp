@@ -35,6 +35,35 @@ void write_audit_log(const string& txn_id, const string& state, const string& in
     }
 }
 
+void recover_from_ledger() {
+    ifstream log_file("ledger.log");
+    if (!log_file.is_open()) {
+        cout << "[C++ Core] WAL Recovery: No existing ledger.log found. Starting fresh." << endl;
+        return;
+    }
+
+    string line;
+    int cnt = 0;
+    while (getline(log_file, line)) {
+        size_t txn_pos = line.find("TXN: ");
+        size_t state_pos = line.find(" | STATE: ");
+        size_t info_pos = line.find(" | INFO: ");
+
+        if (txn_pos != string::npos && state_pos != string::npos && info_pos != string::npos) {
+            string txn_id = line.substr(txn_pos + 5, state_pos - (txn_pos + 5));
+            string state_str = line.substr(state_pos + 10, info_pos - (state_pos + 10));
+
+            if (state_str == "PENDING") store[txn_id] = TxnState::PENDING;
+            else if (state_str == "CAPTURED") store[txn_id] = TxnState::CAPTURED;
+            else if (state_str == "FAILED") store[txn_id] = TxnState::FAILED;
+            else store[txn_id] = TxnState::INITIATED;
+            cnt++;
+        }
+    }
+    cout << "[C++ Core] WAL Recovery: Replayed " << cnt << " log entries (" 
+         << store.size() << " unique transactions restored in RAM)" << endl;
+}
+
 string extract_field(const string& body, const string& key) {
     string search_key = "\"" + key + "\"";
     size_t pos = body.find(search_key);
@@ -58,6 +87,10 @@ void send_json(SOCKET client_socket, int status_code, const string& status_text,
 
 int main() {
     InitializeCriticalSection(&mtx);
+
+    EnterCriticalSection(&mtx);
+    recover_from_ledger();
+    LeaveCriticalSection(&mtx);
 
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);

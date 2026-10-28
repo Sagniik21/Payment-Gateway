@@ -9,9 +9,33 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-const idempotencyCache = new Set();
-const CPP_ENGINE_URL = process.env.CPP_ENGINE_URL || 'http://127.0.0.1:8080';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'upi_super_secret_key_2026';
+// Map stores: idempotency_key -> timestamp (ms)
+const idempotencyCache = new Map();
+const IDEMPOTENCY_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL
+
+// Background cleanup worker runs every 60 seconds to evict expired keys
+setInterval(() => {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [key, timestamp] of idempotencyCache.entries()) {
+        if (now - timestamp > IDEMPOTENCY_TTL_MS) {
+            idempotencyCache.delete(key);
+            evicted++;
+        }
+    }
+    if (evicted > 0) {
+        console.log(`[Gateway] TTL Cache Eviction: Cleared ${evicted} expired idempotency key(s)`);
+    }
+}, 60 * 1000);
+
+const CPP_ENGINE_URL = process.env.CPP_ENGINE_URL;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const UPI_API_KEY = process.env.UPI_API_KEY;
+
+if (!CPP_ENGINE_URL || !WEBHOOK_SECRET || !UPI_API_KEY) {
+    console.error("FATAL SECURITY ERROR: Missing required environment variables in .env file!");
+    process.exit(1);
+}
 
 app.post('/checkout', async (req, res) => {
     const { amount, currency, idempotency_key, customer_vpa } = req.body;
@@ -21,13 +45,17 @@ app.post('/checkout', async (req, res) => {
     }
 
     if (idempotencyCache.has(idempotency_key)) {
-        console.log(`[Gateway] Blocked duplicate request for key: ${idempotency_key}`);
-        return res.status(409).json({ 
-            error: "Duplicate request. Payment already processing for this key." 
-        });
+        const savedTime = idempotencyCache.get(idempotency_key);
+        if (Date.now() - savedTime <= IDEMPOTENCY_TTL_MS) {
+            console.log(`[Gateway] Blocked duplicate request for key: ${idempotency_key}`);
+            return res.status(409).json({ 
+                error: "Duplicate request. Payment already processing for this key." 
+            });
+        }
+        idempotencyCache.delete(idempotency_key);
     }
     
-    idempotencyCache.add(idempotency_key);
+    idempotencyCache.set(idempotency_key, Date.now());
     const internal_txn_id = `txn_${uuidv4()}`;
 
     try {
