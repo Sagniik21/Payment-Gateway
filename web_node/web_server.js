@@ -578,7 +578,7 @@ const htmlPage = `<!DOCTYPE html>
                 <div class="amount-banner">
                     <div>
                         <div class="lbl">Total Payable</div>
-                        <div class="val" id="headerAmount">&#8377;1,500.00</div>
+                        <div class="val" id="headerAmount">&#8377;1,500</div>
                     </div>
                     <div style="text-align:right; font-size:0.75rem; color:#e8f0fe;">
                         <div>Currency: INR</div>
@@ -627,14 +627,14 @@ const htmlPage = `<!DOCTYPE html>
                     <div class="row-2">
                         <div class="field-group">
                             <div class="field-label"><span>Amount (&#8377;)</span></div>
-                            <input id="amount" type="number" class="input-box" value="1500" oninput="syncAmount()" />
+                            <input id="amount" type="number" min="1" class="input-box" value="1500" oninput="syncAmount()" onkeyup="syncAmount()" onchange="syncAmount()" />
                         </div>
                         <div class="field-group">
                             <div class="field-label">
                                 <span>Order Key</span>
-                                <button class="regen-btn" onclick="newOrderKey()">+ New Order</button>
+                                <button type="button" class="regen-btn" onclick="newOrderKey()">+ New Order</button>
                             </div>
-                            <input id="idemKey" class="input-box" style="font-family:'JetBrains Mono',monospace; font-size:0.82rem;" value="order_901" oninput="syncAmount()" />
+                            <input id="idemKey" class="input-box" style="font-family:'JetBrains Mono',monospace; font-size:0.82rem;" value="order_901" oninput="syncAmount()" onkeyup="syncAmount()" />
                         </div>
                     </div>
 
@@ -652,6 +652,7 @@ const htmlPage = `<!DOCTYPE html>
                         Open your UPI app or use the <strong>NPCI Bank Simulator</strong> on the right to settle this transaction.
                     </p>
                     <div class="receipt-card">
+                        <div class="receipt-row"><span>Amount</span><strong id="pendAmount">&#8377;1,500</strong></div>
                         <div class="receipt-row"><span>Transaction ID</span><strong id="pendTxnId">...</strong></div>
                         <div class="receipt-row"><span>Customer VPA</span><strong id="pendVpa">...</strong></div>
                         <div class="receipt-row"><span>State Machine</span><strong style="color:var(--g-yellow);">PENDING (Locked in C++)</strong></div>
@@ -662,7 +663,7 @@ const htmlPage = `<!DOCTYPE html>
                 <!-- VIEW 3: GPAY CAPTURED / FAILED RECEIPT -->
                 <div id="finalScreen" class="state-screen">
                     <div id="finalIcon" class="status-circle ok">&#10003;</div>
-                    <h3 id="finalTitle" style="font-family:'Plus Jakarta Sans',sans-serif; font-size:1.2rem;">Paid &#8377;1,500.00</h3>
+                    <h3 id="finalTitle" style="font-family:'Plus Jakarta Sans',sans-serif; font-size:1.2rem;">Paid &#8377;1,500</h3>
                     <p id="finalSub" style="font-size:0.8rem; color:var(--g-subtext); margin-top:4px;">Verified via HMAC-SHA256 &amp; C++ WAL Ledger</p>
                     <div class="receipt-card">
                         <div class="receipt-row"><span>Transaction ID</span><strong id="finalTxnId">...</strong></div>
@@ -730,13 +731,30 @@ const htmlPage = `<!DOCTYPE html>
         let currentTxnId = '';
         let pollTimer = null;
 
-        function syncAmount() {
-            const raw = Number(document.getElementById('amount').value || 0);
-            const formatted = raw.toLocaleString('en-IN');
-            document.getElementById('headerAmount').textContent = '₹' + formatted + '.00';
-            document.getElementById('btnAmount').textContent = formatted;
-            document.getElementById('headerOrderKey').textContent = document.getElementById('idemKey').value;
+        function formatINR(val) {
+            const num = Number(val);
+            if (!val || isNaN(num) || num <= 0) return '0';
+            return num.toLocaleString('en-IN');
         }
+
+        function syncAmount() {
+            const rawVal = document.getElementById('amount').value;
+            const formatted = formatINR(rawVal);
+            document.getElementById('headerAmount').textContent = '\\u20B9' + formatted;
+            document.getElementById('btnAmount').textContent = formatted;
+            const pendAmtEl = document.getElementById('pendAmount');
+            if (pendAmtEl) pendAmtEl.textContent = '\\u20B9' + formatted;
+            document.getElementById('headerOrderKey').textContent = document.getElementById('idemKey').value || 'order_901';
+        }
+
+        // Bind live listeners immediately
+        const amountEl = document.getElementById('amount');
+        const idemEl = document.getElementById('idemKey');
+        ['input', 'keyup', 'change', 'blur'].forEach(evt => {
+            amountEl.addEventListener(evt, syncAmount);
+            idemEl.addEventListener(evt, syncAmount);
+        });
+        syncAmount();
 
         function setHandle(handle) {
             const input = document.getElementById('vpa');
@@ -765,6 +783,7 @@ const htmlPage = `<!DOCTYPE html>
 
         function resetCheckout(generateFreshOrder) {
             if (generateFreshOrder) newOrderKey();
+            syncAmount();
             showScreen('formScreen');
         }
 
@@ -780,6 +799,7 @@ const htmlPage = `<!DOCTYPE html>
         }
 
         async function initiatePayment() {
+            syncAmount();
             const amount = Number(document.getElementById('amount').value);
             const customer_vpa = document.getElementById('vpa').value;
             const idempotency_key = document.getElementById('idemKey').value;
@@ -832,16 +852,16 @@ const htmlPage = `<!DOCTYPE html>
         function renderFinalReceipt(status) {
             const icon = document.getElementById('finalIcon');
             const title = document.getElementById('finalTitle');
-            const amt = Number(document.getElementById('amount').value).toLocaleString('en-IN');
+            const amt = formatINR(document.getElementById('amount').value);
 
             if (status === 'CAPTURED') {
                 icon.className = 'status-circle ok';
                 icon.innerHTML = '&#10003;';
-                title.textContent = 'Paid ₹' + amt + '.00';
+                title.textContent = 'Paid \\u20B9' + amt;
             } else {
                 icon.className = 'status-circle fail';
                 icon.innerHTML = '&#10005;';
-                title.textContent = 'Payment Declined';
+                title.textContent = 'Payment Declined (\\u20B9' + amt + ')';
             }
 
             document.getElementById('finalTxnId').textContent = currentTxnId;
@@ -875,7 +895,12 @@ const htmlPage = `<!DOCTYPE html>
 
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        });
         return res.end(htmlPage);
     }
 
