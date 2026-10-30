@@ -9,11 +9,13 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Map stores: idempotency_key -> timestamp (ms)
+//here map is used for storing out idempotency keys and their timestamps.
 const idempotencyCache = new Map();
 const IDEMPOTENCY_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL
 
-// Background cleanup worker runs every 60 seconds to evict expired keys
+//this acts as a background cleanup mechanism to remove expired keys every minute
+//which prevents memory bloat and ensures that the cache memory only 
+//contains relevant keys.
 setInterval(() => {
     const now = Date.now();
     let evicted = 0;
@@ -21,7 +23,7 @@ setInterval(() => {
         if (now - timestamp > IDEMPOTENCY_TTL_MS) {
             idempotencyCache.delete(key);
             evicted++;
-        }
+        } else break;
     }
     if (evicted > 0) {
         console.log(`[Gateway] TTL Cache Eviction: Cleared ${evicted} expired idempotency key(s)`);
